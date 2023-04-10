@@ -5,7 +5,7 @@ var dir = exports;
 
 dir.iterator = function (dirChain, opts) {
     opts || (opts = {});
-    
+
     var cache = {buffer:null, n: null};
     function getSectorBuffer(n, cb) {
         if (cache.n === n) cb(null, cache.buffer);
@@ -19,7 +19,7 @@ dir.iterator = function (dirChain, opts) {
             }
         });
     }
-    
+
     var secIdx = 0,
         off = {bytes:0},
         long = null;
@@ -32,7 +32,7 @@ dir.iterator = function (dirChain, opts) {
         getSectorBuffer(secIdx, function (e, buf) {
             if (e) return cb(S.err.IO());
             else if (!buf) return cb(null, null, entryPos);
-            
+
             var entryIdx = off.bytes,
                 signalByte = buf[entryIdx];
             if (signalByte === S.entryDoneFlag) return cb(null, null, entryPos);
@@ -42,7 +42,7 @@ dir.iterator = function (dirChain, opts) {
                 if (opts.includeFree) return cb(null, {_free:true,_pos:entryPos}, entryPos);
                 else return getNextEntry(cb);       // usually just skip these
             }
-            
+
             var attrByte = buf[entryIdx+S.dirEntry.fields.Attr.offset],
                 entryType = (attrByte === S.longDirFlag) ? S.longDirEntry : S.dirEntry_simple;
             var entry = entryType.valueFromBytes(buf, off);
@@ -85,7 +85,7 @@ dir.iterator = function (dirChain, opts) {
                 }
                 if (!bestName) {
                     if (signalByte === S.entryIsE5Flag) entry.Name.filename = '\u00E5'+entry.Name.filename.slice(1);
-                    
+
                     var nam = entry.Name.filename.replace(/ +$/, ''),
                         ext = entry.Name.extension.replace(/ +$/, '');
                     // TODO: lowercase bits http://en.wikipedia.org/wiki/8.3_filename#Compatibility
@@ -93,7 +93,7 @@ dir.iterator = function (dirChain, opts) {
                     bestName = (ext) ? nam+'.'+ext : nam;
                 }
                 entry._name = bestName;
-                
+
                 // OPTIMIZATION: avoid processing any fields for non-matching entries
                 // TODO: we could make this automatic via getters, but…?
                 var _entryBuffer = buf.slice(off.bytes-S.dirEntry.size, off.bytes);
@@ -104,14 +104,14 @@ dir.iterator = function (dirChain, opts) {
                     entry._firstCluster = (entry.FstClusHI << 16) + entry.FstClusLO;
                     return entry;
                 };
-                
+
                 long = null;
                 return cb(null, entry, entryPos);
             } else long = null;
             getNextEntry(cb);
         });
     }
-    
+
     function iter(cb) {
         getNextEntry(cb);
         return iter;            // TODO: previous value can't be re-used, so why make caller re-assign?
@@ -121,10 +121,20 @@ dir.iterator = function (dirChain, opts) {
 
 function _updateEntry(vol, entry, newStats) {
     if ('size' in newStats) entry._size = entry.FileSize = newStats.size;
-    
+
     if ('_touch' in newStats) newStats.archive = newStats.atime = newStats.mtime = true;
     if ('archive' in newStats) entry.Attr.archive = true;           // TODO: also via newStats.mode?
-    
+    if ('name' in newStats) {
+        const [fname, ext] = newStats.name.toUpperCase().split(".", 2);
+        const fnamePadded = fname.padEnd(8);
+        const extPadded = ext.padEnd(3);
+        if (fnamePadded.length > 8 || extPadded.length > 3) {
+            throw new Error("Invalid 8.3 name!");
+        }
+        entry.Name.filename = fnamePadded;
+        entry.Name.extension = extPadded;
+    }
+
     var _now;
     function applyDate(d, prefix, timeToo, tenthToo) {
         if (d === true) d = _now || (_now = new Date());
@@ -140,7 +150,7 @@ function _updateEntry(vol, entry, newStats) {
     if ('ctime' in newStats) applyDate(newStats.ctime, 'Crt', true, true);
     if ('mtime' in newStats) applyDate(newStats.mtime, 'Wrt', true);
     if ('atime' in newStats) applyDate(newStats.atime, 'LstAcc');
-    
+
     if ('mode' in newStats) {
         entry.Attr.directory = (newStats.mode & S._I.FDIR) ? true : false;
         entry.Attr.volume_id = (newStats.mode & S._I.FREG) ? false : true;
@@ -160,7 +170,7 @@ function _updateEntry(vol, entry, newStats) {
             ) ? false : true;
         }
     }
-    
+
     if ('firstCluster' in newStats) {
         entry.FstClusLO = newStats.firstCluster & 0xFFFF;
         entry.FstClusHI = newStats.firstCluster >>> 16;
@@ -171,7 +181,7 @@ function _updateEntry(vol, entry, newStats) {
 
 dir.makeStat = function (vol, entry) {
     var stats = {};     // TODO: return an actual `instanceof fs.Stat` somehow?
-    
+
     stats.isFile = function () {
         return (!entry.Attr.volume_id && !entry.Attr.directory);
     };
@@ -186,8 +196,9 @@ dir.makeStat = function (vol, entry) {
     stats.size = entry.FileSize;
     stats.blksize = vol._sectorsPerCluster*vol._sectorSize;
     stats.blocks = Math.ceil(stats.size / stats.blksize) || 1;
+    stats.firstCluster = (entry.FstClusHI << 16) | entry.FstClusLO;
     stats.nlink = 1;
-    
+
     stats.mode = S._I.RUSR | S._I.RGRP | S._I.ROTH;
     if (!entry.Attr.readonly) stats.mode |= S._I.WUSR | S._I.WGRP | S._I.WOTH;
     if (entry.Attr.directory) stats.mode |= S._I.FDIR;
@@ -204,11 +215,11 @@ dir.makeStat = function (vol, entry) {
         if (entry.Attr.system)  stats.mode |= S._I.SGID;
         if (entry.Attr.hidden)  stats.mode |= S._I.SUID;
     }
-    
+
     stats.mode &= ~vol.opts.umask;
     stats.uid =  vol.opts.uid;
     stats.gid = vol.opts.gid;
-    
+
     function extractDate(prefix) {
         var date = entry[prefix+'Date'],
             time = entry[prefix+'Time'] || {hours:0, minutes:0, seconds_2:0},
@@ -223,11 +234,11 @@ dir.makeStat = function (vol, entry) {
     stats.atime = extractDate('LstAcc');
     stats.mtime = extractDate('Wrt');
     stats.ctime = extractDate('Crt');
-    
+
     entry = {           // keep immutable copy (with only the fields we need)
         Attr: _.extend({},entry.Attr),
     };
-    
+
     return stats;
 };
 
@@ -251,6 +262,13 @@ dir.init = function (vol, dirInfo, cb) {
     dirChain.writeToPosition(0, initialCluster, cb);
 };
 
+dir.reallocateFile = function (vol, dirChain, cb) {
+    vol.allocateInFAT(dirChain.firstCluster || 2, function (e,fileCluster) {
+        // dir.updateEntry(vol, entryInfo, {firstCluster:fileCluster, size:0}, cb);
+        cb(fileCluster)
+    });
+}
+
 dir.addFile = function (vol, dirChain, entryInfo, opts, cb) {
     if (typeof opts === 'function') {
         cb = opts;
@@ -266,7 +284,7 @@ dir.addFile = function (vol, dirChain, entryInfo, opts, cb) {
     if (1 || mainEntry.Name._lossy) {         // HACK: always write long names until `._lossy` is more useful!
         var workaroundTessel427 = ('\uFFFF'.length !== 1);
         if (workaroundTessel427) throw Error("Your JS runtime does not have proper Unicode string support. (If Tessel, is your firmware up-to-date?)");
-        
+
         // name entries should be 0x0000-terminated and 0xFFFF-filled
         var S_lde_f = S.longDirEntry.fields,
             ENTRY_CHUNK_LEN = (S_lde_f.Name1.size + S_lde_f.Name2.size + S_lde_f.Name3.size)/2,
@@ -287,7 +305,7 @@ dir.addFile = function (vol, dirChain, entryInfo, opts, cb) {
         });
         entries[entries.length - 1].Ord |= S.lastLongFlag;
     }
-    
+
     if (entryInfo.tail) {
         var name = mainEntry.Name.filename,
             suffix = '~'+entryInfo.tail,
@@ -297,10 +315,10 @@ dir.addFile = function (vol, dirChain, entryInfo, opts, cb) {
         mainEntry.Name.filename = name.slice(0,sufIdx)+suffix+name.slice(sufIdx+suffix.length);
         _.log(_.log.DBG, "Shortname amended to:", mainEntry.Name);
     }
-    
+
     vol.allocateInFAT(dirChain.firstCluster || 2, function (e,fileCluster) {
         if (e) return cb(e);
-        
+
         var nameBuf = S.dirEntry.fields['Name'].bytesFromValue(mainEntry.Name),
             nameSum = _.checksumName(nameBuf);
         // TODO: finalize initial properties… (via `opts.mode` instead?)
@@ -311,14 +329,14 @@ dir.addFile = function (vol, dirChain, entryInfo, opts, cb) {
         });
         entries.reverse();
         if (entryInfo.lastEntry) entries.push({});
-        
+
         var entriesData = _.allocBuffer(S.dirEntry.size*entries.length),
             dataOffset = {bytes:0};
         entries.forEach(function (entry) {
             var entryType = ('Ord' in entry) ? S.longDirEntry : S.dirEntry;
             entryType.bytesFromValue(entry, entriesData, dataOffset);
         });
-        
+
         _.log(_.log.DBG, "Writing", entriesData.length, "byte directory entry", mainEntry, "into", dirChain.toJSON(), "at", entryInfo.target);
         dirChain.writeToPosition(entryInfo.target, entriesData, function (e) {
             // TODO: if we get error, what/should we clean up?
@@ -332,7 +350,7 @@ dir.findInDirectory = function (vol, dirChain, name, opts, cb) {
     var matchName = name.toUpperCase(),
         tailName = (opts.prepareForCreate) ? _.shortname(name) : null,
         maxTail = 0;
-    
+
     function processNext(next) {
         next = next(function (e, d, entryPos) {
             if (e) cb(e);
@@ -362,7 +380,7 @@ dir.findInDirectory = function (vol, dirChain, name, opts, cb) {
 
 dir.updateEntry = function (vol, entry, newStats, cb) {
     if (!entry._pos || !entry._pos.chain) throw Error("Entry source unknown!");
-    
+
     var entryPos = entry._pos,
         newEntry = _updateEntry(vol, entry, newStats),
         data = S.dirEntry.bytesFromValue(newEntry);

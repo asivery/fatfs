@@ -3,7 +3,7 @@ var fs = require('fs');
 exports.createDriverSync = function (path, opts) {
     opts || (opts = {});
     
-    var secSize = 512,
+    var secSize = 2048,
         ro = opts.readOnly || false,
         fd = fs.openSync(path, (ro) ? 'r' : 'r+'),
         s = fs.fstatSync(fd);

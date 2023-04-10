@@ -22,13 +22,13 @@ exports.createFileSystem = function (volume, opts, cb) {
     }, opts);
     if (!volume.writeSectors) opts.ro = true;
     if (opts.ro) opts.noatime = true;       // natch
-    
+
     var fs = new events.EventEmitter(),
         vol = null,
         dir = require("./dir.js"),
         c = require("./chains.js"),
         q = fifolock();
-    
+
     var GROUP = (_.log.level < _.log.INFO) ? q.TRANSACTION_WRAPPER.bind({
         postAcquire: function (proceed) {
             _.log(_.log.DBG, "=== Starting GROUP ===");
@@ -39,7 +39,7 @@ exports.createFileSystem = function (volume, opts, cb) {
             finish();
         }
     }) : q.TRANSACTION_WRAPPER;
-    
+
     q.acquire(function (unlock) {         // because of this, callers can start before 'ready'
         var d = _.allocBuffer(volume.sectorSize);
         volume.readSectors(0, d, function (e) {
@@ -57,13 +57,13 @@ exports.createFileSystem = function (volume, opts, cb) {
             unlock();
         });
     });
-    
+
     if (cb) fs.on('error', cb).on('ready', cb.bind(null, null));
-    
+
     function init(bootSector) {
         vol = require("./vol.js").init(volume, opts, bootSector);
         fs._dirIterator = dir.iterator.bind(dir);
-        
+
         var entryInfoByPath = {},
             baseEntry = {
                 _refs: 0,
@@ -111,21 +111,22 @@ exports.createFileSystem = function (volume, opts, cb) {
                 });
             });
         }
-        
+
         fs._updateEntry = dir.updateEntry.bind(dir, vol);
         fs._makeStat = dir.makeStat.bind(dir, vol);
         fs._addFile = dir.addFile.bind(dir, vol);
+        fs._reallocateFile = dir.reallocateFile.bind(dir, vol);
         fs._initDir = dir.init.bind(dir, vol);
     }
-    
-    
-    
+
+
+
     /**** ---- CORE API ---- ****/
-    
+
     // NOTE: we really don't share namespace, but avoid first three anyway…
     var fileDescriptors = [null,null,null];
-    
-    fs.open = function (path, flags, mode, cb, _n_) { 
+
+    fs.open = function (path, flags, mode, cb, _n_) {
         if (typeof mode === 'function') {
             _n_ = cb;
             cb = mode;
@@ -161,20 +162,26 @@ exports.createFileSystem = function (volume, opts, cb) {
             }
         });
     }, (_n_ === '_nested_')); };
-    
+
     fs.fstat = function (fd, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.read) _.delayedCall(cb, S.err.BADF());
         else _.delayedCall(cb, null, fs._makeStat(_fd.entry));
     }, (_n_ === '_nested_')); };
-    
+
     fs.futimes = function (fd, atime, mtime, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.write) _.delayedCall(cb, S.err.BADF());
         // NOTE: ctime would get touched on POSIX; but we map that to create time!
         else fs._updateEntry(_fd.entry, {atime:atime||true,mtime:mtime||true}, cb);
     }, (_n_ === '_nested_')); };
-    
+
+    fs.frename = function (fd, newName, cb, _n_) { cb = GROUP(cb, function () {
+        var _fd = fileDescriptors[fd];
+        if (!_fd || !_fd.flags.write) _.delayedCall(cb, S.err.BADF());
+        else fs._updateEntry(_fd.entry, {name: newName}, cb);
+    }, (_n_ === '_nested_')); };
+
     fs.fchmod = function (fd, mode, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.write) _.delayedCall(cb, S.err.BADF());
@@ -185,11 +192,11 @@ exports.createFileSystem = function (volume, opts, cb) {
             fs._updateEntry(_fd.entry, {mode:mode}, cb);
         }
     }, (_n_ === '_nested_')); };
-    
+
     fs.read = function (fd, buf, off, len, pos, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.read) return _.delayedCall(cb, S.err.BADF());
-        
+
         var _pos = (pos === null) ? _fd.pos : pos,
             _len = Math.min(len, _fd.entry._size - _pos),
             _buf = buf.slice(off,off+_len);
@@ -203,11 +210,11 @@ exports.createFileSystem = function (volume, opts, cb) {
             }
         });
     }, (_n_ === '_nested_')); };
-    
+
     fs._readdir = function (fd, cb, _n_)  { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.read) return _.delayedCall(cb, S.err.BADF());
-        
+
         var entryNames = [],
             getNextEntry = fs._dirIterator(_fd.chain);
         function processNext() {
@@ -223,17 +230,17 @@ exports.createFileSystem = function (volume, opts, cb) {
         }
         processNext();
     }, (_n_ === '_nested_')); };
-    
+
     fs._mkdir = function (fd, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.write) _.delayedCall(cb, S.err.BADF());
         else fs._initDir(_fd.info, cb);
     }, (_n_ === '_nested_')); };
-    
+
     fs.write = function (fd, buf, off, len, pos, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.write) return _.delayedCall(cb, S.err.BADF());
-        
+
         var _pos = (pos === null || _fd.flags.append) ? _fd.pos : pos,
             _buf = buf.slice(off,off+len);
         if (_pos > _fd.entry._size) {
@@ -254,11 +261,11 @@ exports.createFileSystem = function (volume, opts, cb) {
             });
         });
     }, (_n_ === '_nested_')); };
-    
+
     fs.ftruncate = function (fd, len, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.write) return _.delayedCall(cb, S.err.BADF());
-        
+
         var newStats = {size:len,_touch:true};
         // NOTE: we order operations for best state in case of only partial success
         if (len === _fd.entry._size) _.delayedCall(cb);
@@ -271,7 +278,7 @@ exports.createFileSystem = function (volume, opts, cb) {
             else fs._updateEntry(_fd.entry, newStats, cb);
         });
     }, (_n_ === '_nested_')); };
-    
+
     // 'NORMAL', 'SEQUENTIAL', 'RANDOM', 'WILLNEED', 'DONTNEED', 'NOREUSE'
     fs._fadviseSync = function (fd, off, len, advice) {
         if (off !== 0 || len !== 0) throw Error("Cache advise can currently be given only for whole file!");
@@ -279,23 +286,23 @@ exports.createFileSystem = function (volume, opts, cb) {
         if (!_fd) throw S.err.BADF();
         else _fd.chain.cacheAdvice = advice;
     };
-    
+
     fs.fsync = function (fd, cb) {
         // NOTE: we'll need to flush write cache here once we have one…
         var _fd = fileDescriptors[fd];
         if (!_fd) _.delayedCall(cb, S.err.BADF());
         else _.delayedCall(cb);
     };
-    
+
     fs.close = function (fd, cb) {
         var _fd = fileDescriptors[fd];
         if (!_fd) _.delayedCall(cb, S.err.BADF());
         else setTimeout(_fd.info.release.bind(_fd.info), 500), _.delayedCall(cb, fileDescriptors[fd] = null);
     };
-    
-    
+
+
     /* STREAM WRAPPERS */
-    
+
     var workaroundTessel436;
     try {
         new require('stream').Readable({encoding:'utf8'});
@@ -303,18 +310,18 @@ exports.createFileSystem = function (volume, opts, cb) {
     } catch (e) {
         workaroundTessel436 = true;
     }
-    
+
     function _createStream(StreamType, path, opts) {
         // [NOT REALLY A] WORKAROUND: https://github.com/tessel/beta/issues/436
         if (workaroundTessel436 && 'encoding' in opts) {
             console.warn("Tessel does not currently support encoding option for Readable streams, discarding!");
             delete opts.encoding;
         }
-        
+
         var fd = (opts.fd !== null) ? opts.fd : '_opening_',
             pos = opts.start,
             stream = new StreamType(opts);
-        
+
         if (fd === '_opening_') fs.open(path, opts.flags, opts.mode, function (e,_fd) {
             if (e) {
                 fd = '_open_error_';
@@ -325,7 +332,7 @@ exports.createFileSystem = function (volume, opts, cb) {
                 stream.emit('open', fd);
             }
         });
-        
+
         function autoClose(tombstone) {      // NOTE: assumes caller will clear `fd`
             if (opts.autoClose) fs.close(fd, function (e) {
                 if (e) stream.emit('error', e);
@@ -333,9 +340,9 @@ exports.createFileSystem = function (volume, opts, cb) {
             });
             fd = tombstone;
         }
-        
+
         if (StreamType === streams.Readable) {
-            
+
             stream._read = function (n) {
                 var buf;
                 // TODO: optimize to fetch at least a full sector regardless of `n`…
@@ -350,15 +357,15 @@ exports.createFileSystem = function (volume, opts, cb) {
                 }), pos += n;
                 else stream.push(null);
             };
-            
+
             stream.once('end', function () {
                 autoClose('_ended_');
             });
-            
+
         } else if (StreamType === streams.Writable) {
-            
+
             stream.bytesWritten = 0;
-            
+
             stream._write = function (data, _enc, cb) {
                 if (fd === '_opening_') stream.once('open', function () { stream._write(data, null, cb); });
                 else fs.write(fd, data, 0, data.length, pos, function (e,n) {
@@ -371,16 +378,16 @@ exports.createFileSystem = function (volume, opts, cb) {
                     }
                 }), pos += data.length;
             };
-            
+
             stream.once('finish', function () {
                 autoClose('_finished_');
             });
-            
+
         }
-        
+
         return stream;
     }
-    
+
     fs.createReadStream = function (path, opts) {
         return _createStream(streams.Readable, path, _.extend({
             start: 0,
@@ -392,7 +399,7 @@ exports.createFileSystem = function (volume, opts, cb) {
             autoClose: true
         }, opts));
     };
-    
+
     fs.createWriteStream = function (path, opts) {
         return _createStream(streams.Writable, path, _.extend({
             start: 0,
@@ -403,10 +410,10 @@ exports.createFileSystem = function (volume, opts, cb) {
             autoClose: true
         }, opts, {decodeStrings:true, objectMode:false}));
     };
-    
-    
+
+
     /* PATH WRAPPERS (albeit the only public interface for some folder operations) */
-    
+
     function _fdOperation(path, opts, fn, cb) { cb = GROUP(cb, function () {
         opts.advice || (opts.advice = 'NORMAL');
         fs.open(path, opts.flag, function (e,fd) {
@@ -419,19 +426,19 @@ exports.createFileSystem = function (volume, opts, cb) {
             });
         }, '_nested_');
     }); }
-    
+
     fs.stat = fs.lstat = function (path, cb) {
         _fdOperation(path, {flag:'r'}, function (fd, cb) {
             fs.fstat(fd, cb, '_nested_');
         }, cb);
     };
-    
+
     fs.exists = function(path, cb){
       fs.stat(path, function(err){
          cb(err ? false : true);
-      });  
+      });
     };
-    
+
     fs.readFile = function (path, opts, cb) {
         if (typeof opts === 'function') {
             cb = opts;
@@ -452,7 +459,7 @@ exports.createFileSystem = function (volume, opts, cb) {
             }, '_nested_');
         }, cb);
     };
-    
+
     fs.writeFile = function (path, data, opts, cb) {
         if (typeof opts === 'function') {
             cb = opts;
@@ -465,7 +472,7 @@ exports.createFileSystem = function (volume, opts, cb) {
             fs.write(fd, data, 0, data.length, null, function (e) { cb(e); }, '_nested_');
         }, cb);
     };
-    
+
     fs.appendFile = function (path, data, opts, cb) {
         if (typeof opts === 'function') {
             cb = opts;
@@ -474,19 +481,19 @@ exports.createFileSystem = function (volume, opts, cb) {
         opts.flag || (opts.flag = 'a');
         fs.writeFile(path, data, opts, cb);
     };
-    
+
     fs.truncate = function (path, len, cb) {
         _fdOperation(path, {flag:'r+'}, function (fd, cb) {
             fs.ftruncate(fd, len, cb, '_nested_');
         }, cb);
     };
-    
+
     fs.readdir = function (path, cb) {
         _fdOperation(path, {flag:'\\r'}, function (fd, cb) {
             fs._readdir(fd, cb, '_nested_');
         }, cb);
     };
-    
+
     fs.mkdir = function (path, mode, cb) {
         if (typeof mode === 'function') {
             cb = mode;
@@ -496,33 +503,51 @@ exports.createFileSystem = function (volume, opts, cb) {
             fs._mkdir(fd, cb, '_nested_');
         }, cb);
     };
-    
+
     fs.utimes = function (path, atime, mtime, cb) {
         _fdOperation(path, {flag:'r+'}, function (fd, cb) {
             fs.futimes(fd, atime, mtime, cb, '_nested_');
         }, cb);
     };
-    
+
+    fs.rename = function (path, newName, cb) {
+        _fdOperation(path, {flag:'r+'}, function (fd, cb) {
+            fs.frename(fd, newName, cb, '_nested_');
+        }, cb);
+    };
+
+    fs.reallocateAnew = function (path, cb) {
+        fs._sharedEntryForSteps(_.absoluteSteps(path), {prepareForCreate:false}, function (e,info) {
+            fs._reallocateFile(info.parent.chain, fileCluster => {
+                fs._updateEntry(info.entry, {firstCluster:fileCluster, size:0}, () => {
+                    info.chain.cacheAdvice = 'WILLNEED';
+                    info.parent.chain.cacheAdvice = 'WILLNEED';
+                    cb();
+                });
+            });
+        });
+    };
+
     fs.chmod = fs.lchmod = function (path, mode, cb) {
         _fdOperation(path, {flag:'\\r+'}, function (fd, cb) {
             fs.fchmod(fd, mode, cb, '_nested_');
         }, cb);
     };
-    
+
     fs.chown = fs.lchown = function (path, uid, gid, cb) {
         _fdOperation(path, {flag:'\\r+'}, function (fd, cb) {
             fs.fchown(fd, uid, gid, cb, '_nested_');
         }, cb);
     };
-    
-    
+
+
     /* STUBS */
-    
+
     fs.link = function (src, dst, cb) {
         // NOTE: theoretically we _could_ do hard links [with untracked `stat.nlink` count…]
         _.delayedCall(cb, S.err.NOSYS());
     };
-    
+
     fs.symlink = function (src, dst, type, cb) {
         if (typeof type === 'function') {
             cb = type;
@@ -530,7 +555,7 @@ exports.createFileSystem = function (volume, opts, cb) {
         }
         _.delayedCall(cb, S.err.NOSYS());
     };
-    
+
     fs.readlink = function (path, cb) {
         _fdOperation(path, {flag:'\\r'}, function (fd, cb) {
             // the named file is *never* a symbolic link…
@@ -538,7 +563,7 @@ exports.createFileSystem = function (volume, opts, cb) {
             cb(S.err.INVAL());
         }, cb);
     };
-    
+
     fs.realpath = function (path, cache, cb) {
         if (typeof cache === 'function') {
             cb = cache;
@@ -549,13 +574,13 @@ exports.createFileSystem = function (volume, opts, cb) {
             cb(null, _.absolutePath(path));
         }, cb);
     };
-    
+
     fs.fchown = function (fd, uid, gid, cb, _n_) { cb = GROUP(cb, function () {
         var _fd = fileDescriptors[fd];
         if (!_fd || !_fd.flags.write) _.delayedCall(cb, S.err.BADF());
         else _.delayedCall(cb, S.err.NOSYS());
     }, (_n_ === '_nested_')); };
-    
-    
+
+
     return fs;
 }

@@ -4,7 +4,6 @@ var S = require("./structs.js"),
     _ = require("./helpers.js");
 
 exports.init = function (volume, opts, bootSector) {
-    if (bootSector[510] !== 0x55 || bootSector[511] !== 0xAA) throw Error("Invalid volume signature!");
     
     var isFAT16 = bootSector.readUInt16LE(S.boot16.fields['FATSz16'].offset),
         bootStruct = (isFAT16) ? S.boot16 : S.boot32,
