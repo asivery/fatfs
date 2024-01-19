@@ -200,24 +200,24 @@ exports.fatStat = {
 };
 
 exports._I = {
-    RUSR: 0400,
-    WUSR: 0200,
-    XUSR: 0100,
+    RUSR: 0o0400,
+    WUSR: 0o0200,
+    XUSR: 0o0100,
     
-    RGRP: 0040,
-    WGRP: 0020,
-    XGRP: 0010,
+    RGRP: 0o0040,
+    WGRP: 0o0020,
+    XGRP: 0o0010,
     
-    ROTH: 0004,
-    WOTH: 0002,
-    XOTH: 0001,
+    ROTH: 0o0004,
+    WOTH: 0o0002,
+    XOTH: 0o0001,
     
-    SUID: 04000,
-    SGID: 02000,
-    SVTX: 01000,
+    SUID: 0o04000,
+    SGID: 0o02000,
+    SVTX: 0o01000,
     
-    FDIR: 040000,
-    FREG: 0100000,
+    FDIR: 0o040000,
+    FREG: 0o0100000,
 };
 
 exports._I.RWXU = exports._I.RUSR | exports._I.WUSR | exports._I.XUSR;

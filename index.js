@@ -15,8 +15,8 @@ exports.createFileSystem = function (volume, opts, cb) {
         // c.f. https://www.kernel.org/doc/Documentation/filesystems/vfat.txt
         ro: false,
         noatime: true,
-        modmode: 0111,       // or `07000`
-        umask: ('umask' in process) ? process.umask() : 0022,
+        modmode: 0o0111,       // or `07000`
+        umask: ('umask' in process) ? process.umask() : 0o0022,
         uid: ('getuid' in process) ? process.getuid() : 0,
         gid: ('getgid' in process) ? process.getgid() : 0
     }, opts);
@@ -130,7 +130,7 @@ exports.createFileSystem = function (volume, opts, cb) {
         if (typeof mode === 'function') {
             _n_ = cb;
             cb = mode;
-            mode = 0666;
+            mode = 0o0666;
         }
     cb = GROUP(cb, function () {
         var _fd = {flags:null,entry:null,chain:null,pos:0},
@@ -393,7 +393,7 @@ exports.createFileSystem = function (volume, opts, cb) {
             start: 0,
             end: Infinity,
             flags: 'r',
-            mode: 0666,
+            mode: 0o0666,
             encoding: null,
             fd: null,           // ??? see https://github.com/joyent/node/issues/7708
             autoClose: true
@@ -404,7 +404,7 @@ exports.createFileSystem = function (volume, opts, cb) {
         return _createStream(streams.Writable, path, _.extend({
             start: 0,
             flags: 'w',
-            mode: 0666,
+            mode: 0o0666,
             //encoding: null,   // see https://github.com/joyent/node/issues/7710
             fd: null,           // ??? see https://github.com/joyent/node/issues/7708
             autoClose: true
@@ -497,7 +497,7 @@ exports.createFileSystem = function (volume, opts, cb) {
     fs.mkdir = function (path, mode, cb) {
         if (typeof mode === 'function') {
             cb = mode;
-            mode = 0777;
+            mode = 0o0777;
         }
         _fdOperation(path, {flag:'\\wx'}, function (fd, cb) {
             fs._mkdir(fd, cb, '_nested_');

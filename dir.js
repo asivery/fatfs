@@ -154,12 +154,12 @@ function _updateEntry(vol, entry, newStats) {
     if ('mode' in newStats) {
         entry.Attr.directory = (newStats.mode & S._I.FDIR) ? true : false;
         entry.Attr.volume_id = (newStats.mode & S._I.FREG) ? false : true;
-        if (vol.opts.modmode === 0111) {
+        if (vol.opts.modmode === 0o0111) {
             entry.Attr.archive = (newStats.mode & S._I.XUSR) ? true : false;
             entry.Attr.system  = (newStats.mode & S._I.XGRP) ? true : false;
             entry.Attr.hidden  = (newStats.mode & S._I.XOTH) ? true : false;
             entry.Attr.readonly = (newStats.mode & S._I.WUSR) ? false : true;
-        } else if (vol.opts.modmode === 07000) {
+        } else if (vol.opts.modmode === 0o07000) {
             entry.Attr.archive = (newStats.mode & S._I.SVTX) ? true : false;
             entry.Attr.system  = (newStats.mode & S._I.SGID) ? true : false;
             entry.Attr.hidden  = (newStats.mode & S._I.SUID) ? true : false;
@@ -204,12 +204,12 @@ dir.makeStat = function (vol, entry) {
     if (entry.Attr.directory) stats.mode |= S._I.FDIR;
     else if (!entry.Attr.volume_id) stats.mode |= S._I.FREG;
     // NOTE: discussion at https://github.com/natevw/fatfs/issues/7
-    if (vol.opts.modmode === 0111) {
+    if (vol.opts.modmode === 0o0111) {
         // expose using executable bits, like Samba
         if (entry.Attr.archive) stats.mode |= S._I.XUSR;
         if (entry.Attr.system)  stats.mode |= S._I.XGRP;
         if (entry.Attr.hidden)  stats.mode |= S._I.XOTH;
-    } else if (vol.opts.modmode === 07000) {
+    } else if (vol.opts.modmode === 0o07000) {
         // expose using setXid/sticky bits, like MKS
         if (entry.Attr.archive) stats.mode |= S._I.SVTX;
         if (entry.Attr.system)  stats.mode |= S._I.SGID;
